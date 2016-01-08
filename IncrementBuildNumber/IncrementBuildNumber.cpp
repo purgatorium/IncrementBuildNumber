@@ -4,6 +4,7 @@
 #include <shellapi.h>
 #include <io.h>
 #include "StdString.h"
+#include "Token.hpp"
 
 
 
@@ -94,38 +95,11 @@ CStdStringW UTF8ToUnicode(const char* source, long source_len = -1)
 
 
 
-// Properties 디렉토리의 AssemblyInfo.cs 파일에서 버전정보를 변경한다.
-void ProcessCSharpProject(CStdString &csharp_target)
+// "1.0.0.1" 을 처리
+void _ReplaceVersionString(CStdStringW &line, int begin)
 {
-	// 파일 열어본다
-	AutoCloseHandle fp(CreateFile(csharp_target, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
-	if (INVALID_HANDLE_VALUE == fp.Get())
-	{
-		::MessageBox(NULL, _T("파일 열기 오류\r\n") + csharp_target, _T("안내"), MB_ICONINFORMATION);
-		return;
-	}
-
-	// 내용 통째로 읽고
-	CStdStringA real_file_buffer;
-	DWORD size = 0;
-	if (FALSE == ReadFile(fp.Get(), real_file_buffer.GetBufferSetLength(10240), 10240, &size, NULL))
-		return;
-	real_file_buffer.ReleaseBuffer();
-
-	// 내용이 UTF8이므로 UTF16으로 변경하고 작업
-	CStdStringW buffer(UTF8ToUnicode(real_file_buffer.c_str(), real_file_buffer.size()));
-	size_t bsize = buffer.size();
-
-	// [assembly: AssemblyFileVersion("a.b.c.d")] 변경
-	int begin = buffer.Find(L"AssemblyFileVersion(\"");
-	if (-1 == begin)
-		return;
-	int end = buffer.Find(L"\r\n", begin);
-	if (-1 == end || begin >= end)
-		return;
-
 	// a,b,c,d")]
-	CStdStringW replace_src = buffer.substr(begin, end-begin);
+	CStdStringW replace_src = line.substr(begin);
 
 	// d
 	CStdStringW build_number_str = replace_src.substr(replace_src.ReverseFind(L".") + 1);
@@ -148,22 +122,101 @@ void ProcessCSharpProject(CStdString &csharp_target)
 	replace_dst += L"\")]";
 	//::MessageBox(NULL, _T("[") + CStdString(replace_src) + _T("]"), _T("안내"), MB_ICONINFORMATION);
 	//::MessageBox(NULL, _T("[") + CStdString(replace_dst) + _T("]"), _T("안내"), MB_ICONINFORMATION);
-	buffer.Replace(replace_src, replace_dst);
-
-	// 작업이 완료되었으므로 UTF16을 다시 UTF8로 변경
-	//::MessageBox(NULL, CStdString(buffer), _T("안내"), MB_ICONINFORMATION);
-	real_file_buffer = UnicodeToUTF8(buffer.c_str(), buffer.size());
-	if (INVALID_SET_FILE_POINTER != SetFilePointer(fp.Get(), 0, NULL, FILE_BEGIN))
-	{
-		// 내용 통째로 저장한다.
-		char BOM[3] = {0xEF, 0xBB, 0xBF};
-		WriteFile(fp.Get(), BOM, 3, &size, NULL);
-		size_t len = real_file_buffer.size();
-		WriteFile(fp.Get(), real_file_buffer.c_str(), real_file_buffer.size(), &size, NULL);
-		if (len > size)
-			return;
-	}
+	line.Replace(replace_src, replace_dst);
 }
+
+// Properties 디렉토리의 AssemblyInfo.cs 파일에서 버전정보를 변경한다.
+void ProcessCSharpProject(CStdString &csharp_target)
+{
+	using namespace peter;
+
+	// 파일 열어본다
+	AutoCloseHandle fp(CreateFile(csharp_target, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
+	if (INVALID_HANDLE_VALUE == fp.Get())
+	{
+		::MessageBox(NULL, _T("파일 열기 오류\r\n") + csharp_target, _T("안내"), MB_ICONINFORMATION);
+		return;
+	}
+
+	// 내용 통째로 읽고
+	CStdStringA real_file_buffer;
+	DWORD size = 0;
+	if (FALSE == ReadFile(fp.Get(), real_file_buffer.GetBufferSetLength(10240), 10240, &size, NULL))
+		return;
+
+
+	// 151223 peter: BOM이 계속 추가되는걸 지금껏 모르고 있었다...
+	// 빌드 번호가 1200된 프로젝트가 있는데 AssemblyInfo.cs 파일이 이상하게 용량이 커서 확인해보니 이런 문제가 있었음
+	// EFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBFEFBBBF...
+	char BOM[3] = { 0xEF, 0xBB, 0xBF };
+	// BOM을 몽땅 삭제한다.
+	while (0 == memcmp(real_file_buffer.GetBuffer(), BOM, 3))
+	{
+		memmove_s(real_file_buffer.GetBuffer(), 10240, real_file_buffer.GetBuffer() + 3, 10240 - 3);
+	}
+	real_file_buffer.ReleaseBuffer();
+
+
+	// 내용이 UTF8이므로 UTF16으로 변경하고 작업
+	CStdStringW buffer(UTF8ToUnicode(real_file_buffer.c_str(), real_file_buffer.size()));
+
+	// 160106 peter: 파일 등록정보에 보이는 버전 말고도 어셈블리 버전도 변경해달라는 요청이 있어 두가지 버전정보 모두 변경하게 수정
+	Token<wchar_t> token(L"\r\n");
+	token.Tokenize(buffer);
+	buffer.clear();
+
+	// 한줄씩 처리한다.
+	for (int i = 0; i < token.GetCount(); ++i)
+	{
+		CStdStringW line(token.GetToken(i));
+		// “// [assembly: AssemblyVersion("1.0.*")]” 부분을 넘어가기 위함
+		if (0 == wcsncmp(line, L"//", 2))
+		{
+			// 내용 그대로 저장
+			buffer += line + "\r\n";
+			continue;
+		}
+
+		// [assembly: AssemblyVersion("a.b.c.d")] 변경
+		int begin = line.Find(L"AssemblyVersion(\"");
+		if (0 <= begin)
+		{
+			_ReplaceVersionString(line, begin);
+
+			// 수정한 내용 저장
+			buffer += line + "\r\n";
+			continue;
+		}
+
+		// [assembly: AssemblyFileVersion("a.b.c.d")] 변경
+		begin = line.Find(L"AssemblyFileVersion(\"");
+		if (0 <= begin)
+		{
+			_ReplaceVersionString(line, begin);
+
+			// 수정한 내용 저장
+			buffer += line + "\r\n";
+			continue;
+		}
+
+		// 내용 그대로 저장
+		buffer += line + "\r\n";
+	}
+
+
+	// 파일 내용 수정할꺼다. seek 안되면 작업 불가
+	if (INVALID_SET_FILE_POINTER == SetFilePointer(fp.Get(), 0, NULL, FILE_BEGIN))
+		return;
+
+	// 일단 UTF8 헤더 저장
+	WriteFile(fp.Get(), BOM, 3, &size, NULL);
+
+	real_file_buffer = UnicodeToUTF8(buffer.c_str(), buffer.size());
+	WriteFile(fp.Get(), real_file_buffer.c_str(), real_file_buffer.size(), &size, NULL);
+
+	SetEndOfFile(fp.Get());
+}
+
 
 
 // 리소스파일은 한개만 있는것을 활용, 버전정보를 변경한다.
@@ -247,6 +300,11 @@ public:
 		DWORD size = 0;
 		if (FALSE == ReadFile(fp, buffer.GetBufferSetLength(10240), 10240, &size, NULL))
 			return;
+		// 160106 peter: 여기도 마찬가지로 FEFFFEFFFEFFFEFFFEFFFEFF......... 로 처리될듯. 그래서 수정
+		while (0 == memcmp(buffer.GetBuffer(), bom.c_str(), 2))
+		{
+			memmove_s(buffer.GetBuffer(), 10240, buffer.GetBuffer() + 2, 10240 - 2);
+		}
 		buffer.ReleaseBuffer();
 
 		// 버전정보 변경 후
@@ -265,6 +323,7 @@ public:
 			// UTF16: 내용 통째로 저장한다.
 			WriteFile(fp, bom.c_str(), bom.size(), &size, NULL); // BOM 저장해야지
 			WriteFile(fp, buffer.c_str(), buffer.size() * sizeof(wchar_t), &size, NULL);
+			SetEndOfFile(fp);
 		}
 	}
 
@@ -292,6 +351,7 @@ public:
 		{
 			// MBCS: 내용 통째로 저장한다.
 			WriteFile(fp, buffer.c_str(), buffer.size(), &size, NULL);
+			SetEndOfFile(fp);
 		}
 	}
 
