@@ -13,7 +13,6 @@ VisualStuio 사용시 C++/C# 프로젝트의 버전 정보의 마지막 필드�
 
 - 그래서 빌드할때 강제로 버전정보를 수정하는 프로그램을 만들었습니다.
 
-
 ```
 프로젝트 설정의 PreBuildEvent 항목에 아래 내용을 추가합니다.
 IncrementBuildNumber.exe "$(ProjectDir)"
@@ -35,3 +34,11 @@ IncrementBuildNumber.exe "$(ProjectDir)"
 - [x] C#
 - [ ] F#
 - [ ] VB
+
+# 변경이력
+- 2016.01.06
+ ① C#의 경우 파일버전 및 어셈블리버전도 함께 수정됩니다.
+ ② C++ ???.rc 파일에 FEFF를 계속 추가하는 버그 수정
+
+- 2015.12.23
+ ① C# AssemblyInfo.cs 파일에 EFBBBF를 계속 추가하는 버그 수정
